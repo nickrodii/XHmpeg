@@ -140,12 +140,35 @@ input[type="number"] {
   transition: border-color 0.2s, box-shadow 0.2s, background 0.2s;
 }
 
+select.custom-select {
+  background: var(--input);
+  border: 1px solid var(--border);
+  box-shadow: none;
+  padding: 10px 12px;
+  width: 100%;
+  color: var(--text);
+  appearance: auto;
+  -webkit-appearance: auto;
+  -moz-appearance: auto;
+  border-radius: 10px;
+}
+
 select:focus,
 input:focus {
   border-color: var(--accent-2);
   box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.2);
   outline: none;
   background: var(--panel);
+}
+
+input[type="number"] {
+  -moz-appearance: textfield;
+}
+
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
 }
 
 button {
@@ -208,12 +231,17 @@ button:active:not(:disabled) {
 
 .inline-fields {
   display: flex;
-  gap: 10px;
+  gap: 12px;
   align-items: center;
 }
 
 .inline-fields input {
   flex: 1;
+}
+
+.inline-fields input:focus {
+  border-color: transparent;
+  box-shadow: none;
 }
 
 .times {
@@ -406,6 +434,20 @@ button:active:not(:disabled) {
   font-size: 100px;
   letter-spacing: 0.04em;
   margin: 14px;
+  background: linear-gradient(90deg, #7c3aed, #3b82f6, #7c3aed);
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: text-wave 6s linear infinite;
+}
+
+.brand-top {
+  text-align: center;
+}
+
+.brand-small {
+  font-size: 72px;
+  margin: 8px 0 12px;
 }
 
 .progress {
@@ -458,8 +500,13 @@ button:active:not(:disabled) {
 
 .done-title {
   font-family: "Iceland", "Segoe UI", system-ui, sans-serif;
-  font-size: 60px;
-  margin: 4px 0 8px;
+  font-size: 96px;
+  margin: 4px 0 12px;
+  background: linear-gradient(90deg, #7c3aed, #3b82f6, #7c3aed);
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: text-wave 6s linear infinite;
 }
 
 .file-save-block {
@@ -499,6 +546,15 @@ button:active:not(:disabled) {
 .stepper,
 .sticky-info {
   position: relative;
+}
+
+@keyframes text-wave {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
 }
 
 @media (max-width: 800px) {

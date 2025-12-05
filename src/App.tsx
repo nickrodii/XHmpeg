@@ -7,10 +7,11 @@ import "./App.css";
 
 type MediaInfo = {
   duration_seconds: number;
-  width: number;
-  height: number;
-  fps: number;
-  bitrate_kbps: number;
+  width?: number;
+  height?: number;
+  fps?: number;
+  bitrate_kbps?: number;
+  has_video: boolean;
 };
 
 type NumericPreset = {
@@ -33,6 +34,7 @@ const FPS_PRESETS: NumericPreset[] = [
 ];
 
 const VIDEO_BITRATE_PRESETS: NumericPreset[] = [
+  { label: "Source", value: "source" },
   { label: "8000 kbps", value: "8000", amount: 8000 },
   { label: "6000 kbps", value: "6000", amount: 6000 },
   { label: "4000 kbps", value: "4000", amount: 4000 },
@@ -41,6 +43,7 @@ const VIDEO_BITRATE_PRESETS: NumericPreset[] = [
 ];
 
 const AUDIO_BITRATE_PRESETS: NumericPreset[] = [
+  { label: "Source", value: "source" },
   { label: "320 kbps", value: "320", amount: 320 },
   { label: "192 kbps", value: "192", amount: 192 },
   { label: "128 kbps", value: "128", amount: 128 },
@@ -50,6 +53,11 @@ const AUDIO_BITRATE_PRESETS: NumericPreset[] = [
 const FORMAT_OPTIONS: FormatOption[] = [
   { label: "MP4 (H.264 + AAC)", value: "mp4", ext: "mp4" },
   { label: "MKV (H.264 + AAC)", value: "mkv", ext: "mkv" },
+];
+
+const AUDIO_FORMAT_OPTIONS: FormatOption[] = [
+  { label: "MP3", value: "mp3", ext: "mp3" },
+  { label: "WAV", value: "wav", ext: "wav" },
 ];
 
 const SETTINGS_STORE_FILE = "settings.json";
@@ -155,8 +163,9 @@ function App() {
   const [customVideoBitrate, setCustomVideoBitrate] = useState<string>("");
   const [sourceVideoBitrate, setSourceVideoBitrate] = useState<number | null>(null);
 
-  const [audioBitratePreset] = useState<string>("192");
-  const [customAudioBitrate] = useState<string>("");
+  const [audioBitratePreset, setAudioBitratePreset] = useState<string>("192");
+  const [customAudioBitrate, setCustomAudioBitrate] = useState<string>("");
+  const [sourceAudioBitrate, setSourceAudioBitrate] = useState<number | null>(null);
 
   const [outputDir, setOutputDir] = useState<string>("");
   const [outputFilename, setOutputFilename] = useState<string>("output");
@@ -184,6 +193,7 @@ function App() {
   }, []);
 
   const durationMs = mediaInfo ? Math.round(mediaInfo.duration_seconds * 1000) : 0;
+  const isAudioOnly = mediaInfo ? !mediaInfo.has_video : false;
 
   const clipLengthSeconds = useMemo(() => {
     return Math.max(0, (endMs - startMs) / 1000);
@@ -235,13 +245,31 @@ function App() {
       const v = parseInt(customAudioBitrate, 10);
       return Number.isFinite(v) ? v : undefined;
     }
+    if (audioBitratePreset === "source") return sourceAudioBitrate ?? undefined;
     const preset = AUDIO_BITRATE_PRESETS.find((p) => p.value === audioBitratePreset);
     return preset?.amount;
-  }, [audioBitratePreset, customAudioBitrate]);
+  }, [audioBitratePreset, customAudioBitrate, sourceAudioBitrate]);
+
+  const effectiveVideoBitrate = useMemo(() => {
+    if (isAudioOnly) return 0;
+    if (!videoBitrateValue) return 0;
+    if (sourceFps && fpsValue) {
+      return Math.round(videoBitrateValue * (fpsValue / sourceFps));
+    }
+    return videoBitrateValue;
+  }, [isAudioOnly, videoBitrateValue, sourceFps, fpsValue]);
+
+  const formatOptions = useMemo(() => (isAudioOnly ? AUDIO_FORMAT_OPTIONS : FORMAT_OPTIONS), [isAudioOnly]);
 
   const currentFormat = useMemo(() => {
-    return FORMAT_OPTIONS.find((f) => f.value === format) ?? FORMAT_OPTIONS[0];
-  }, [format]);
+    return formatOptions.find((f) => f.value === format) ?? formatOptions[0];
+  }, [format, formatOptions]);
+
+  useEffect(() => {
+    if (currentFormat?.value !== format) {
+      setFormat(currentFormat.value);
+    }
+  }, [currentFormat, format]);
 
   const finalOutputPath = useMemo(() => {
     const base = outputFilename.replace(/\.[^/.]+$/, "") || "output";
@@ -252,7 +280,7 @@ function App() {
 
   const estimatedSizeText = useMemo(() => {
     if (!clipLengthSeconds) return "--";
-    const totalKbps = (videoBitrateValue ?? 0) + (audioBitrateValue ?? 0);
+    const totalKbps = (effectiveVideoBitrate ?? 0) + (audioBitrateValue ?? 0);
     if (!totalKbps) return "--";
     const bytes = (totalKbps * 1000 * clipLengthSeconds) / 8;
     const mb = bytes / (1024 * 1024);
@@ -296,7 +324,10 @@ function App() {
     const selected = await open({
       multiple: false,
       filters: [
-        { name: "Media", extensions: ["mp4", "mov", "mkv", "avi", "webm", "m4v"] },
+        {
+          name: "Media",
+          extensions: ["mp4", "mov", "mkv", "avi", "webm", "m4v", "mp3", "wav", "aac", "flac", "ogg"],
+        },
       ],
     });
     if (!selected || Array.isArray(selected)) return;
@@ -306,22 +337,39 @@ function App() {
     try {
       const info = await invoke<MediaInfo>("analyze_media", { path: selected });
       setMediaInfo(info);
-      setSourceResolution({ width: info.width, height: info.height });
-      setSourceVideoBitrate(info.bitrate_kbps || null);
-      setResolutionOptions(buildResolutionOptions(info.width, info.height));
-      setResolutionPreset("source");
-      setSourceFps(info.fps);
-      setFpsPreset("source");
+      setSourceAudioBitrate(info.bitrate_kbps ?? null);
       if (info.bitrate_kbps) {
-        setVideoBitratePreset("source");
+        setCustomAudioBitrate(String(info.bitrate_kbps));
+        setAudioBitratePreset("source");
       } else {
-        setVideoBitratePreset("8000");
+        setAudioBitratePreset("192");
+      }
+      if (info.has_video && info.width && info.height) {
+        setSourceResolution({ width: info.width, height: info.height });
+        setResolutionOptions(buildResolutionOptions(info.width, info.height));
+        setResolutionPreset("source");
+        setSourceVideoBitrate(info.bitrate_kbps ?? null);
+        setSourceFps(info.fps ?? null);
+        setFpsPreset("source");
+        if (info.bitrate_kbps) {
+          setVideoBitratePreset("source");
+        } else {
+          setVideoBitratePreset("8000");
+        }
+      } else {
+        setResolutionOptions([]);
+        setResolutionPreset("source");
+        setSourceVideoBitrate(null);
+        setSourceFps(null);
+        setFpsPreset("source");
+        setVideoBitratePreset("source");
       }
       setStartMs(0);
       const end = Math.round(info.duration_seconds * 1000);
       setEndMs(end);
       const base = baseNameNoExt(fileNameFromPath(selected)) || "output";
       setOutputFilename(`${base}_converted`);
+      setFormat(info.has_video ? "mp4" : "mp3");
       if (!outputDir) {
         setOutputDir(parentDir(selected));
       }
@@ -377,6 +425,7 @@ function App() {
           video_bitrate_kbps: videoBitrateValue ?? null,
           audio_bitrate_kbps: audioBitrateValue ?? null,
           format: currentFormat.value,
+          is_audio_only: isAudioOnly,
         },
       });
       setStatus("");
@@ -460,6 +509,7 @@ function App() {
           <h2>Resolution</h2>
         </div>
         <select
+          className={resolutionPreset === "custom" ? "custom-select" : ""}
           value={resolutionPreset}
           onChange={(e) => setResolutionPreset(e.target.value)}
           disabled={!mediaInfo}
@@ -494,6 +544,7 @@ function App() {
           <h2>FPS</h2>
         </div>
         <select
+          className={fpsPreset === "custom" ? "custom-select" : ""}
           value={fpsPreset}
           onChange={(e) => setFpsPreset(e.target.value)}
           disabled={!mediaInfo}
@@ -519,6 +570,7 @@ function App() {
           <h2>Video bitrate</h2>
         </div>
         <select
+          className={videoBitratePreset === "custom" ? "custom-select" : ""}
           value={videoBitratePreset}
           onChange={(e) => setVideoBitratePreset(e.target.value)}
           disabled={!mediaInfo}
@@ -576,7 +628,7 @@ function App() {
         <div className="output-format">
           <p className="label">Format</p>
           <select value={format} onChange={(e) => setFormat(e.target.value)}>
-            {FORMAT_OPTIONS.map((opt) => (
+            {formatOptions.map((opt) => (
               <option key={opt.value} value={opt.value}>
                 {opt.label}
               </option>
@@ -669,14 +721,20 @@ function App() {
   const canGoNext =
     mediaInfo &&
     ((step === 2 && durationMs > 0) ||
-      step === 3 ||
+      (!isAudioOnly && step === 3) ||
       (step === 4 && outputDir && outputFilename));
 
   return (
     <div className="app">
       {step > 1 && (
+        <div className="brand-top">
+          <h1 className="brand-title brand-small">xhMPEG</h1>
+        </div>
+      )}
+
+      {step > 1 && (
         <div className="stepper">
-          {[2, 3, 4, 5, 6].map((i) => (
+          {(isAudioOnly ? [2, 4, 5, 6] : [2, 3, 4, 5, 6]).map((i) => (
             <div key={i} className={`step-line ${step === i ? "active" : ""}`} />
           ))}
         </div>
@@ -689,12 +747,33 @@ function App() {
       {step >= 2 && step <= 4 && (
         <div className="wizard-nav">
           {step > 1 && step <= 4 && (
-            <button className="ghost" onClick={() => setStep(step - 1)}>
+            <button
+              className="ghost"
+              onClick={() => {
+                if (isAudioOnly && step === 4) {
+                  setStep(2);
+                } else if (step > 1) {
+                  setStep(step - 1);
+                } else {
+                  setStep(1);
+                }
+              }}
+            >
               Back
             </button>
           )}
           {step < 4 && (
-            <button className="primary" onClick={() => setStep(step + 1)} disabled={!canGoNext}>
+            <button
+              className="primary"
+              onClick={() => {
+                if (isAudioOnly && step === 2) {
+                  setStep(4);
+                } else {
+                  setStep(step + 1);
+                }
+              }}
+              disabled={!canGoNext}
+            >
               Next
             </button>
           )}
