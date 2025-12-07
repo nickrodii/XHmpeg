@@ -1,16 +1,22 @@
-# XHmpeg
+# xhMPEG
 
-This is a GUI wrapper for FFmpeg, built for computers running Windows 10 or newer.
+### **xhMPEG is a program for that allows you to do very basic FFmpeg operations with an extremely simple GUI**
 
-This program includes the following features from FFmpeg:
-- Video format conversion to mp4, mkv, avi, or mov
-- Audio format conversions to mp3, wav, aac, or flac
-- Change resolution, FPS, and bitrate of a video
-- Trim video length down to a specified duration
-- View file size of video / audio file before conversion
+## Features
 
-## Project Completion Progress
-This program is nowhere near completion, and only features the GUI for what's to come. There will be a compiled executable available once the program has some functionality.
+- Video format conversion to mp4, mkv, mov, WebM, avi, flv, and even gif
+- Audio format conversions to mp3, wav, flac, aac, ogg, and Opus
+- Change resolution, FPS, and bitrate of a video to any value
+- Trim video length to any specified duration
+- View an estimated file size of the video before conversion
+- Extract audio from a video file
 
-## Note on downloading this program
-Since this program uses ffmpeg, ffprobe and ffplay, make sure to add those binaries into xhmpeg/tools/ffmpeg/ folder to ensure the program works upon building the application
+## Extra QoL settings
+
+The user can also:
+- Enable an advanced mode that compiles all of the steps into one page for quicker conversions
+- Enable a setting that exits the program and sends the user to the location of the converted file once converted
+
+## To do
+
+- Incorporate yt-dlp
