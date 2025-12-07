@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { open } from "@tauri-apps/plugin-dialog";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { revealItemInDir, openUrl } from "@tauri-apps/plugin-opener";
 import { Store } from "@tauri-apps/plugin-store";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import "./App.css";
@@ -57,14 +58,14 @@ const FORMAT_OPTIONS: FormatOption[] = [
   { label: "WebM", value: "webm", ext: "webm" },
   { label: "AVI", value: "avi", ext: "avi" },
   { label: "FLV", value: "flv", ext: "flv" },
-  { label: "Animated GIF", value: "gif", ext: "gif" },
+  { label: "GIF", value: "gif", ext: "gif" },
 ];
 
 const AUDIO_FORMAT_OPTIONS: FormatOption[] = [
   { label: "MP3", value: "mp3", ext: "mp3" },
   { label: "WAV", value: "wav", ext: "wav" },
   { label: "FLAC", value: "flac", ext: "flac" },
-  { label: "AAC (M4A)", value: "m4a", ext: "m4a" },
+  { label: "AAC", value: "m4a", ext: "m4a" },
   { label: "OGG", value: "ogg", ext: "ogg" },
   { label: "Opus", value: "opus", ext: "opus" },
 ];
@@ -156,6 +157,7 @@ function App() {
   const [status, setStatus] = useState<string>("");
   const [lastOutputPath, setLastOutputPath] = useState<string>("");
   const [step, setStep] = useState<number>(1);
+  const [autoOpenExit, setAutoOpenExit] = useState<boolean>(false);
 
   const [resolutionPreset, setResolutionPreset] = useState<string>("source");
   const [customWidth, setCustomWidth] = useState<string>("");
@@ -186,6 +188,11 @@ function App() {
   const [dragging, setDragging] = useState<"start" | "end" | null>(null);
 
   useEffect(() => {
+    // Keep the window fixed size to prevent layout issues.
+    getCurrentWindow()
+      .setResizable(false)
+      .catch((err) => console.error("Failed to lock window size", err));
+
     let cancelled = false;
     (async () => {
       try {
@@ -193,6 +200,10 @@ function App() {
         storeRef.current = store;
         const saved = await store.get<string>("lastOutputDir");
         if (saved && !cancelled) setOutputDir(saved);
+        const savedAuto = await store.get<boolean>("autoOpenExit");
+        if (typeof savedAuto === "boolean" && !cancelled) setAutoOpenExit(savedAuto);
+        const savedAdvanced = await store.get<boolean>("advancedMode");
+        if (typeof savedAdvanced === "boolean" && !cancelled) setAdvancedMode(savedAdvanced);
       } catch (err) {
         console.error("Failed to load store", err);
       }
@@ -394,7 +405,7 @@ function App() {
 
   const pickMediaFile = async () => {
     setStatus("");
-    const selected = await open({
+    const selected = await openDialog({
       multiple: false,
       filters: [
         {
@@ -456,7 +467,7 @@ function App() {
   };
 
   const pickOutputDir = async () => {
-    const dir = await open({ directory: true, multiple: false });
+    const dir = await openDialog({ directory: true, multiple: false });
     if (!dir || Array.isArray(dir)) return;
     setOutputDir(dir);
     if (storeRef.current) {
@@ -466,6 +477,55 @@ function App() {
       } catch (err) {
         console.error("Failed to save output dir", err);
       }
+    }
+  };
+
+  const updateAdvancedMode = async (value: boolean) => {
+    setAdvancedMode(value);
+    if (storeRef.current) {
+      try {
+        await storeRef.current.set("advancedMode", value);
+        await storeRef.current.save();
+      } catch (err) {
+        console.error("Failed to save advanced mode setting", err);
+      }
+    }
+  };
+
+  const updateAutoOpenExit = async (value: boolean) => {
+    setAutoOpenExit(value);
+    if (storeRef.current) {
+      try {
+        await storeRef.current.set("autoOpenExit", value);
+        await storeRef.current.save();
+      } catch (err) {
+        console.error("Failed to save auto-open setting", err);
+      }
+    }
+  };
+
+  const openOutputLocation = async () => {
+    if (!lastOutputPath) return;
+    try {
+      await revealItemInDir(lastOutputPath);
+      setStatus("");
+    } catch (err) {
+      console.error("Failed to open output folder", err);
+      setStatus("Couldn't open the output folder.");
+    }
+  };
+
+  const autoOpenAndExitIfEnabled = async (outputPath: string) => {
+    if (!autoOpenExit) return;
+    try {
+      await revealItemInDir(outputPath);
+    } catch (err) {
+      console.error("Failed to auto-open output folder", err);
+    }
+    try {
+      await getCurrentWindow().close();
+    } catch (err) {
+      console.error("Failed to exit after auto-open", err);
     }
   };
 
@@ -503,6 +563,7 @@ function App() {
       });
       setStatus("");
       setStep(6);
+      await autoOpenAndExitIfEnabled(outputPath);
     } catch (err) {
       console.error(err);
       setStatus(`Conversion failed: ${err}`);
@@ -551,7 +612,7 @@ function App() {
             <p className="value">{formatHMS(endMs)}</p>
           </div>
           <div>
-            <p className="label">Clip length</p>
+            <p className="label">Length</p>
             <p className="value">{formatHMS(Math.max(0, endMs - startMs))}</p>
           </div>
         </div>
@@ -597,92 +658,91 @@ function App() {
   };
 
   const renderQualityPage = () => (
-    <section className="panel grid">
-      <div>
-        <div className="panel-header">
-          <h2>Resolution</h2>
+    <section className="panel quality-panel">
+      <div className="panel-header center">
+        <h2>Quality</h2>
+      </div>
+      <div className="quality-grid">
+        <div>
+          <p className="label">Resolution</p>
+          <select
+            className={resolutionPreset === "custom" ? "custom-select" : ""}
+            value={resolutionPreset}
+            onChange={(e) => setResolutionPreset(e.target.value)}
+            disabled={!mediaInfo}
+          >
+            {[...resolutionOptions, { label: "Custom", value: "custom" }].map((preset) => (
+              <option key={preset.value} value={preset.value}>
+                {preset.label}
+              </option>
+            ))}
+          </select>
+          {resolutionPreset === "custom" && (
+            <div className="inline-fields">
+              <input
+                type="number"
+                placeholder="Width"
+                value={customWidth}
+                onChange={(e) => setCustomWidth(e.target.value)}
+              />
+              <span className="times">x</span>
+              <input
+                type="number"
+                placeholder="Height"
+                value={customHeight}
+                onChange={(e) => setCustomHeight(e.target.value)}
+              />
+            </div>
+          )}
         </div>
-        <select
-          className={resolutionPreset === "custom" ? "custom-select" : ""}
-          value={resolutionPreset}
-          onChange={(e) => setResolutionPreset(e.target.value)}
-          disabled={!mediaInfo}
-        >
-          {[...resolutionOptions, { label: "Custom", value: "custom" }].map((preset) => (
-            <option key={preset.value} value={preset.value}>
-              {preset.label}
-            </option>
-          ))}
-        </select>
-        {resolutionPreset === "custom" && (
-          <div className="inline-fields">
+
+        <div>
+          <p className="label">FPS</p>
+          <select
+            className={fpsPreset === "custom" ? "custom-select" : ""}
+            value={fpsPreset}
+            onChange={(e) => setFpsPreset(e.target.value)}
+            disabled={!mediaInfo}
+          >
+            {fpsOptions.map((preset) => (
+              <option key={preset.value} value={preset.value}>
+                {preset.label}
+              </option>
+            ))}
+          </select>
+          {fpsPreset === "custom" && (
             <input
               type="number"
-              placeholder="Width"
-              value={customWidth}
-              onChange={(e) => setCustomWidth(e.target.value)}
+              placeholder="fps"
+              value={customFps}
+              onChange={(e) => setCustomFps(e.target.value)}
             />
-            <span className="times">x</span>
+          )}
+        </div>
+
+        <div>
+          <p className="label">Video bitrate</p>
+          <select
+            className={videoBitratePreset === "custom" ? "custom-select" : ""}
+            value={videoBitratePreset}
+            onChange={(e) => setVideoBitratePreset(e.target.value)}
+            disabled={!mediaInfo}
+          >
+            {videoBitrateOptions.map((preset) => (
+              <option key={preset.value} value={preset.value}>
+                {preset.label}
+              </option>
+            ))}
+          </select>
+          {videoBitratePreset === "custom" && (
             <input
               type="number"
-              placeholder="Height"
-              value={customHeight}
-              onChange={(e) => setCustomHeight(e.target.value)}
+              placeholder="kbps"
+              value={customVideoBitrate}
+              onChange={(e) => setCustomVideoBitrate(e.target.value)}
             />
-          </div>
-        )}
-      </div>
-
-      <div>
-        <div className="panel-header">
-          <h2>FPS</h2>
+          )}
         </div>
-        <select
-          className={fpsPreset === "custom" ? "custom-select" : ""}
-          value={fpsPreset}
-          onChange={(e) => setFpsPreset(e.target.value)}
-          disabled={!mediaInfo}
-        >
-          {fpsOptions.map((preset) => (
-            <option key={preset.value} value={preset.value}>
-              {preset.label}
-            </option>
-          ))}
-        </select>
-        {fpsPreset === "custom" && (
-          <input
-            type="number"
-            placeholder="fps"
-            value={customFps}
-            onChange={(e) => setCustomFps(e.target.value)}
-          />
-        )}
-      </div>
-
-      <div>
-        <div className="panel-header">
-          <h2>Video bitrate</h2>
-        </div>
-        <select
-          className={videoBitratePreset === "custom" ? "custom-select" : ""}
-          value={videoBitratePreset}
-          onChange={(e) => setVideoBitratePreset(e.target.value)}
-          disabled={!mediaInfo}
-        >
-          {videoBitrateOptions.map((preset) => (
-            <option key={preset.value} value={preset.value}>
-              {preset.label}
-            </option>
-          ))}
-        </select>
-        {videoBitratePreset === "custom" && (
-          <input
-            type="number"
-            placeholder="kbps"
-            value={customVideoBitrate}
-            onChange={(e) => setCustomVideoBitrate(e.target.value)}
-          />
-        )}
       </div>
     </section>
   );
@@ -697,8 +757,21 @@ function App() {
           <p className="label">Folder</p>
           <div className="inline-fields">
             <input type="text" value={outputDir} readOnly placeholder="Choose output folder" />
-            <button className="browse-btn" onClick={pickOutputDir}>
-              Browse
+            <button className="browse-btn" onClick={pickOutputDir} aria-label="Browse for folder">
+              <svg
+                width="18"
+                height="18"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M3 6h6l2 2h10v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" />
+                <path d="M3 6V4a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v2" />
+              </svg>
             </button>
           </div>
         </div>
@@ -713,15 +786,15 @@ function App() {
             />
             <span className="suffix">.{currentFormat.ext}</span>
           </div>
-        </div>
-        <div className="output-format">
-          <p className="label">Format</p>
-          <select value={format} onChange={(e) => setFormat(e.target.value)}>
-            {formatOptions.map((opt) => (
-              <option key={opt.value} value={opt.value}>
-                {opt.label}
-              </option>
-            ))}
+            </div>
+            <div className="output-format compact-format">
+              <p className="label">Format</p>
+              <select value={format} onChange={(e) => setFormat(e.target.value)}>
+                {formatOptions.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
           </select>
         </div>
       </div>
@@ -734,7 +807,7 @@ function App() {
       <div className="progress">
         <div className="progress-bar smooth" />
       </div>
-      <p className="helper">Working with ffmpeg, please wait.</p>
+      <p className="helper">Please wait...</p>
     </section>
   );
 
@@ -753,42 +826,262 @@ function App() {
         <button
           className="ghost"
           onClick={() => {
-            getCurrentWindow().close();
-          }}
-        >
-          Exit
-        </button>
-        <button
-          className="primary"
-          onClick={() => {
             setSelectedFile("");
             setMediaInfo(null);
             setStatus("");
+            setLastOutputPath("");
             setStep(1);
           }}
         >
           Convert another file
         </button>
+        <button
+          className="ghost"
+          onClick={openOutputLocation}
+          disabled={!lastOutputPath}
+        >
+          Go to file
+        </button>
+        <button
+          className="primary"
+          onClick={() => {
+            getCurrentWindow().close();
+          }}
+        >
+          Exit
+        </button>
       </div>
     </section>
   );
 
-  const renderAdvancedPage = () => (
-    <>
-      {renderTrimPage()}
-      {renderQualityPage()}
-      {renderOutputPage()}
-      <div className="wizard-nav" style={{ justifyContent: "flex-end" }}>
-        <button
-          className="run-cta"
-          onClick={runConversion}
-          disabled={!mediaInfo || conversionRunning}
-        >
-          {conversionRunning ? "Converting..." : "Run"}
-        </button>
+  const renderAdvancedPage = () => {
+    const startPct = durationMs ? (startMs / durationMs) * 100 : 0;
+    const endPct = durationMs ? (endMs / durationMs) * 100 : 0;
+    const clipMs = Math.max(0, endMs - startMs);
+
+    return (
+      <div className="advanced-layout">
+        <div className="advanced-grid-2">
+          <section className="panel compact-panel">
+            <div className="advanced-output-row">
+            <div className="output-path">
+              <p className="label">Folder</p>
+              <div className="inline-fields">
+                <input
+                  type="text"
+                  className="output-path-input"
+                  value={outputDir}
+                  readOnly
+                  placeholder="Choose output folder"
+                />
+                <button className="browse-btn" onClick={pickOutputDir} aria-label="Browse for folder">
+                  <svg
+                    width="18"
+                    height="18"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    aria-hidden="true"
+                  >
+                    <path d="M3 6h6l2 2h10v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" />
+                    <path d="M3 6V4a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v2" />
+                  </svg>
+                </button>
+              </div>
+            </div>
+              <div className="output-format">
+                <p className="label">Format</p>
+                <select value={format} onChange={(e) => setFormat(e.target.value)}>
+                  {formatOptions.map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+            <div className="output-file advanced-filename">
+              <div className="inline-fields">
+                <input
+                  type="text"
+                  value={outputFilename}
+                  onChange={(e) => setOutputFilename(e.target.value.replace(/\.[^/.]+$/, ""))}
+                  placeholder="output"
+                />
+                <span className="suffix">.{currentFormat.ext}</span>
+              </div>
+            </div>
+          </section>
+
+          <section className="panel compact-panel">
+            <div className="trim-readout compact-readout">
+              <div>
+                <p className="label">Start</p>
+                <p className="value">{formatHMS(startMs)}</p>
+              </div>
+              <div>
+                <p className="label">End</p>
+                <p className="value">{formatHMS(endMs)}</p>
+              </div>
+              <div>
+              <p className="label">Length</p>
+                <p className="value">{formatHMS(clipMs)}</p>
+              </div>
+            </div>
+            <div
+              className="trim-slider"
+              ref={sliderRef}
+              onPointerDown={(e) => {
+                if (durationMs <= 0) return;
+                const rect = sliderRef.current?.getBoundingClientRect();
+                if (!rect) return;
+                const ratio = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
+                const ms = ratio * durationMs;
+                const distanceToStart = Math.abs(ms - startMs);
+                const distanceToEnd = Math.abs(ms - endMs);
+                setDragging(distanceToStart <= distanceToEnd ? "start" : "end");
+                handlePointerMove(e.clientX);
+              }}
+            >
+              <div className="trim-track" />
+              <div
+                className="trim-range"
+                style={{ left: `${startPct}%`, width: `${Math.max(0, endPct - startPct)}%` }}
+              />
+              <div
+                className="trim-handle"
+                style={{ left: `${startPct}%` }}
+                onPointerDown={(e) => {
+                  e.stopPropagation();
+                  setDragging("start");
+                }}
+              />
+              <div
+                className="trim-handle"
+                style={{ left: `${endPct}%` }}
+                onPointerDown={(e) => {
+                  e.stopPropagation();
+                  setDragging("end");
+                }}
+              />
+            </div>
+          </section>
+
+          {!isAudioOnly && (
+          <section className="panel compact-panel quality-wide">
+              <div className="advanced-inline">
+                <div className="grow">
+                  <p className="label">Resolution</p>
+                  <select
+                    className={resolutionPreset === "custom" ? "custom-select" : ""}
+                    value={resolutionPreset}
+                    onChange={(e) => setResolutionPreset(e.target.value)}
+                    disabled={!mediaInfo}
+                  >
+                    {[...resolutionOptions, { label: "Custom", value: "custom" }].map((preset) => (
+                      <option key={preset.value} value={preset.value}>
+                        {preset.label}
+                      </option>
+                    ))}
+                  </select>
+                  {resolutionPreset === "custom" && (
+                    <div className="inline-fields">
+                      <input
+                        type="number"
+                        placeholder="Width"
+                        value={customWidth}
+                        onChange={(e) => setCustomWidth(e.target.value)}
+                      />
+                      <span className="times">x</span>
+                      <input
+                        type="number"
+                        placeholder="Height"
+                        value={customHeight}
+                        onChange={(e) => setCustomHeight(e.target.value)}
+                      />
+                    </div>
+                  )}
+                </div>
+                <div className="grow">
+                  <p className="label">FPS</p>
+                  <select
+                    className={fpsPreset === "custom" ? "custom-select" : ""}
+                    value={fpsPreset}
+                    onChange={(e) => setFpsPreset(e.target.value)}
+                    disabled={!mediaInfo}
+                  >
+                    {fpsOptions.map((preset) => (
+                      <option key={preset.value} value={preset.value}>
+                        {preset.label}
+                      </option>
+                    ))}
+                  </select>
+                  {fpsPreset === "custom" && (
+                    <input
+                      type="number"
+                      placeholder="fps"
+                      value={customFps}
+                      onChange={(e) => setCustomFps(e.target.value)}
+                    />
+                  )}
+                </div>
+                <div className="grow">
+                  <p className="label">Video bitrate</p>
+                  <select
+                    className={videoBitratePreset === "custom" ? "custom-select" : ""}
+                    value={videoBitratePreset}
+                    onChange={(e) => setVideoBitratePreset(e.target.value)}
+                    disabled={!mediaInfo}
+                  >
+                    {videoBitrateOptions.map((preset) => (
+                      <option key={preset.value} value={preset.value}>
+                        {preset.label}
+                      </option>
+                    ))}
+                  </select>
+                  {videoBitratePreset === "custom" && (
+                    <input
+                      type="number"
+                      placeholder="kbps"
+                      value={customVideoBitrate}
+                      onChange={(e) => setCustomVideoBitrate(e.target.value)}
+                    />
+                  )}
+                </div>
+              </div>
+            </section>
+          )}
+        </div>
+
+        <div className="advanced-actions">
+          <div className="advanced-buttons">
+            <button
+              className="ghost"
+              onClick={() => {
+                setSelectedFile("");
+                setMediaInfo(null);
+                setStatus("");
+                setLastOutputPath("");
+                setStep(1);
+              }}
+            >
+              Back
+            </button>
+            <button
+              className="run-cta"
+              onClick={runConversion}
+              disabled={!mediaInfo || conversionRunning}
+            >
+              {conversionRunning ? "Converting..." : "Run"}
+            </button>
+          </div>
+        </div>
       </div>
-    </>
-  );
+    );
+  };
 
   const renderWelcome = () => (
     <section className="welcome-plain">
@@ -830,16 +1123,26 @@ function App() {
           <input
             type="checkbox"
             checked={advancedMode}
-            onChange={(e) => setAdvancedMode(e.target.checked)}
+            onChange={(e) => updateAdvancedMode(e.target.checked)}
           />
           <span className="label">Advanced Mode</span>
+        </label>
+        <label className="advanced-toggle">
+          <input
+            type="checkbox"
+            checked={autoOpenExit}
+            onChange={(e) => updateAutoOpenExit(e.target.checked)}
+          />
+          <span className="label">Open location and exit after conversion</span>
         </label>
       </section>
     </>
   );
 
   const renderStepContent = () => {
-    if (advancedMode && mediaInfo) {
+    if (step === 5) return renderRunningPage();
+    if (step === 6) return renderDonePage();
+    if (advancedMode && mediaInfo && step >= 2) {
       return renderAdvancedPage();
     }
     switch (step) {
@@ -853,10 +1156,6 @@ function App() {
         return renderQualityPage();
       case 4:
         return renderOutputPage();
-      case 5:
-        return renderRunningPage();
-      case 6:
-        return renderDonePage();
       default:
         return renderWelcome();
     }
@@ -871,8 +1170,10 @@ function App() {
   const showWizardNav = !(advancedMode && mediaInfo);
   const showStepper = showWizardNav && step > 1;
 
+  const isAdvancedView = advancedMode && mediaInfo && step >= 2;
+
   return (
-    <div className="app">
+    <div className={`app ${isAdvancedView ? "advanced-view" : ""}`}>
       <div
         className={`top-bar drag-region ${step === 1 ? "top-bar-welcome" : ""} ${step === 0 ? "top-bar-settings" : ""}`}
         data-tauri-drag-region
@@ -930,13 +1231,39 @@ function App() {
       </div>
 
       {step === 1 && (
-        <button className="settings-btn no-drag" title="Settings" onClick={() => setStep(0)}>
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z" />
-            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.09a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.09a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.09a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z" />
-          </svg>
-          <span className="settings-tab">Settings</span>
-        </button>
+        <>
+          <button
+            className="donate-btn no-drag"
+            title="Support my work"
+            onClick={() => {
+              openUrl("https://www.paypal.com/donate/?business=2XHBCR8TMFA3N&no_recurring=0&currency_code=USD").catch(
+                (err) => console.error("Failed to open donate link", err),
+              );
+            }}
+          >
+            <svg
+              width="18"
+              height="18"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M12 21s-6-4.35-9-9a5.25 5.25 0 0 1 8.1-6.45L12 6l.9-.45A5.25 5.25 0 0 1 21 12c-3 4.65-9 9-9 9Z" />
+            </svg>
+            <span className="donate-tab">Support my work</span>
+          </button>
+          <button className="settings-btn no-drag" title="Settings" onClick={() => setStep(0)}>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z" />
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.09a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.09a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.09a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z" />
+            </svg>
+            <span className="settings-tab">Settings</span>
+          </button>
+        </>
       )}
       {step === 0 && (
         <button className="settings-btn no-drag" title="Back" onClick={() => setStep(1)}>
@@ -1014,7 +1341,7 @@ function App() {
         </div>
       )}
 
-      {status && step !== 5 && step !== 6 && <div className="status">{status}</div>}
+      {status && step !== 5 && <div className="status">{status}</div>}
     </div>
   );
 }

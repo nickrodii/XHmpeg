@@ -15,7 +15,7 @@
         "title": "xhMPEG",
         "width": 1200,
         "height": 700,
-        "resizable": true,
+        "resizable": false,
         "fullscreen": false,
         "maximized": false,
         "decorations": false

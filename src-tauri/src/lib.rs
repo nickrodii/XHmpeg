@@ -159,6 +159,7 @@ fn build_ffmpeg_args(options: &ConversionOptions) -> Result<Vec<String>, String>
     let mut args: Vec<String> = Vec::new();
     args.push("-y".to_string());
 
+    let format = options.format.as_deref().unwrap_or("mp4");
     let start_secs = options.start_ms as f64 / 1000.0;
     let duration_secs = (options.end_ms - options.start_ms) as f64 / 1000.0;
 
@@ -174,13 +175,19 @@ fn build_ffmpeg_args(options: &ConversionOptions) -> Result<Vec<String>, String>
     args.push(format!("{duration_secs:.3}"));
 
     if options.is_audio_only {
+        let audio_codec = match format {
+            "mp3" => "libmp3lame",
+            "wav" => "pcm_s16le",
+            "flac" => "flac",
+            "ogg" => "libvorbis",
+            "opus" => "libopus",
+            "m4a" | "aac" => "aac",
+            other => return Err(format!("Unsupported audio format: {other}")),
+        };
+
         args.push("-vn".to_string());
         args.push("-c:a".to_string());
-        match options.format.as_deref() {
-            Some("mp3") => args.push("libmp3lame".to_string()),
-            Some("wav") => args.push("pcm_s16le".to_string()),
-            _ => args.push("aac".to_string()),
-        }
+        args.push(audio_codec.to_string());
         if let Some(ab) = options.audio_bitrate_kbps {
             args.push("-b:a".to_string());
             args.push(format!("{ab}k"));
@@ -198,34 +205,71 @@ fn build_ffmpeg_args(options: &ConversionOptions) -> Result<Vec<String>, String>
             args.push(filters.join(","));
         }
 
+        let mut video_codec = "libx264";
+        let mut audio_codec: Option<&str> = Some("aac");
+        let mut add_x264_preset = true;
+        let mut pix_fmt: Option<&str> = Some("yuv420p");
+        let mut extra: Vec<String> = Vec::new();
+
+        match format {
+            "mp4" | "mov" => {
+                extra.push("-movflags".to_string());
+                extra.push("+faststart".to_string());
+            }
+            "mkv" => {}
+            "webm" => {
+                video_codec = "libvpx-vp9";
+                audio_codec = Some("libopus");
+                add_x264_preset = false;
+            }
+            "avi" => {
+                audio_codec = Some("mp3");
+            }
+            "flv" => {
+                audio_codec = Some("aac");
+            }
+            "gif" => {
+                video_codec = "gif";
+                audio_codec = None;
+                add_x264_preset = false;
+                pix_fmt = Some("rgb8");
+                extra.push("-an".to_string());
+                extra.push("-loop".to_string());
+                extra.push("0".to_string());
+            }
+            other => return Err(format!("Unsupported format: {other}")),
+        }
+
         args.push("-c:v".to_string());
-        args.push("libx264".to_string());
-        args.push("-preset".to_string());
-        args.push("medium".to_string());
+        args.push(video_codec.to_string());
+        if add_x264_preset && video_codec == "libx264" {
+            args.push("-preset".to_string());
+            args.push("medium".to_string());
+        }
 
         if let Some(vb) = options.video_bitrate_kbps {
-            args.push("-b:v".to_string());
-            args.push(format!("{vb}k"));
-        }
-
-        args.push("-c:a".to_string());
-        args.push("aac".to_string());
-        if let Some(ab) = options.audio_bitrate_kbps {
-            args.push("-b:a".to_string());
-            args.push(format!("{ab}k"));
-        }
-
-        match options.format.as_deref() {
-            Some("mp4") | None => {
-                args.push("-movflags".to_string());
-                args.push("+faststart".to_string());
+            // Skip setting a bitrate for GIF; the encoder will choose based on palette.
+            if video_codec != "gif" {
+                args.push("-b:v".to_string());
+                args.push(format!("{vb}k"));
             }
-            Some("mkv") => {}
-            Some(other) => return Err(format!("Unsupported format: {other}")),
         }
 
-        args.push("-pix_fmt".to_string());
-        args.push("yuv420p".to_string());
+        if let Some(ac) = audio_codec {
+            args.push("-c:a".to_string());
+            args.push(ac.to_string());
+            if let Some(ab) = options.audio_bitrate_kbps {
+                args.push("-b:a".to_string());
+                args.push(format!("{ab}k"));
+            }
+        }
+
+        args.extend(extra);
+
+        if let Some(fmt) = pix_fmt {
+            args.push("-pix_fmt".to_string());
+            args.push(fmt.to_string());
+        }
     }
 
     args.push(options.output_path.clone());
