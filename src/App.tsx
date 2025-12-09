@@ -21,7 +21,6 @@ import {
   fileNameFromPath,
   parentDir,
   baseNameNoExt,
-  formatHMS,
   buildResolutionOptions
 } from "./utils/mediaUtils";
 
