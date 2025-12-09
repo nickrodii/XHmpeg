@@ -34,6 +34,5 @@ The user can also:
 - Rust language (syntax)
 - TypeScript language (syntax)
 - Thread management (async, spawn_blocking)
-- Multithreading (ffmpeg output line-by-line streaming)
 - Component-based architecture
 
